@@ -48,8 +48,9 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field
 
-from dedalus_mcp import MCPServer, get_context, tool
+from dedalus_mcp import MCPServer, tool
 from dedalus_mcp.auth import Connection, SecretKeys
+from dedalus_mcp.server import AuthorizationConfig
 
 
 # -----------------------------------------------------------------------------
@@ -139,7 +140,7 @@ async def graphql_request(token: str, query: str, variables: dict[str, Any] | No
 
 
 # -----------------------------------------------------------------------------
-# Connection Setup
+# Connection & Server Setup
 # -----------------------------------------------------------------------------
 
 # Define the connection - credentials will be provided via OAuth flow
@@ -149,12 +150,14 @@ linear = Connection(
     base_url=LINEAR_API_URL,
 )
 
-# Create the server
+# Create the server with auth disabled (allows health checks to pass)
+# The Connection declaration tells the platform to inject OAuth tokens as LINEAR_TOKEN
 server = MCPServer(
     name="linear",
     version="1.0.0",
     instructions="Linear issue tracking MCP server. Use these tools to manage issues, projects, and teams in Linear.",
     connections=[linear],
+    authorization=AuthorizationConfig(enabled=False),
 )
 
 
