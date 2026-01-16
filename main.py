@@ -46,7 +46,7 @@ from enum import Enum
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from dedalus_mcp import MCPServer, tool
 from dedalus_mcp.auth import Connection, SecretKeys
@@ -224,14 +224,14 @@ async def list_teams() -> list[Team]:
 async def list_issues(
     team_key: str | None = None,
     state: IssueState | None = None,
-    limit: int = Field(default=10, ge=1, le=50),
+    limit: int = 10,
 ) -> list[Issue]:
     """List issues with optional filters.
 
     Args:
         team_key: Filter by team key (e.g., "ENG")
         state: Filter by issue state
-        limit: Maximum number of issues to return (1-50)
+        limit: Maximum number of issues to return (default: 10)
     """
     token = os.environ.get("LINEAR_TOKEN", "")
 
@@ -460,13 +460,13 @@ async def create_issue(
 @tool(description="Search issues by text query")
 async def search_issues(
     query: str,
-    limit: int = Field(default=10, ge=1, le=50),
+    limit: int = 10,
 ) -> list[Issue]:
     """Search for issues by text.
 
     Args:
         query: Search query (searches title and description)
-        limit: Maximum number of results (1-50)
+        limit: Maximum number of results (default: 10)
     """
     token = os.environ.get("LINEAR_TOKEN", "")
 
