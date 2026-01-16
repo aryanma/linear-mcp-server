@@ -1,0 +1,624 @@
+#!/usr/bin/env python3
+# Copyright (c) 2025 Dedalus Labs, Inc. and its contributors
+# SPDX-License-Identifier: MIT
+
+"""
+Linear MCP Server - OAuth-protected MCP server for Linear issue tracking.
+
+This server demonstrates the OAuth browser flow integration. When deployed,
+users will be prompted to authenticate with Linear before they can use the tools.
+
+Deployment Environment Variables:
+    OAUTH_ENABLED=true
+    OAUTH_AUTHORIZE_URL=https://linear.app/oauth/authorize
+    OAUTH_TOKEN_URL=https://api.linear.app/oauth/token
+    OAUTH_CLIENT_ID=b119ad4bbfdf5e3c7e6bb8dc42bda206
+    OAUTH_CLIENT_SECRET=encrypted:<fernet_encrypted_secret>
+    OAUTH_SCOPES_AVAILABLE=read,write,issues:create
+
+Note on OAUTH_CLIENT_SECRET:
+    The client secret must be encrypted using the platform encryption key.
+    Use the encrypt_client_secret() function from admin.services.oauth:
+
+        from admin.services.oauth import encrypt_client_secret
+        encrypted = encrypt_client_secret("your_raw_client_secret")
+        # Returns: "encrypted:gAAA..."
+
+    For local testing, you can use a plain text secret (legacy support),
+    but production deployments MUST use encrypted secrets.
+
+Note on OAUTH_SCOPES_AVAILABLE:
+    These are the scopes the server SUPPORTS. Clients can request a subset
+    when initiating the OAuth flow:
+        GET /oauth/connect?server=xxx&scopes=read,issues:create
+
+Usage (local testing with personal token):
+    export LINEAR_TOKEN="lin_api_..."
+    python examples/linear_server.py
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from enum import Enum
+from typing import Any
+
+import httpx
+from pydantic import BaseModel, Field
+
+from dedalus_mcp import MCPServer, get_context, tool
+from dedalus_mcp.auth import Connection, SecretKeys
+
+
+# -----------------------------------------------------------------------------
+# Types & Models
+# -----------------------------------------------------------------------------
+
+
+class IssueState(str, Enum):
+    """Linear issue states."""
+    BACKLOG = "backlog"
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    CANCELED = "canceled"
+
+
+class IssuePriority(int, Enum):
+    """Linear issue priorities (0 = no priority, 1 = urgent, 4 = low)."""
+    NO_PRIORITY = 0
+    URGENT = 1
+    HIGH = 2
+    MEDIUM = 3
+    LOW = 4
+
+
+class Issue(BaseModel):
+    """Linear issue."""
+    id: str
+    identifier: str  # e.g., "ENG-123"
+    title: str
+    description: str | None = None
+    state: str | None = None
+    priority: int | None = None
+    assignee: str | None = None
+    project: str | None = None
+    url: str | None = None
+
+
+class Team(BaseModel):
+    """Linear team."""
+    id: str
+    name: str
+    key: str  # e.g., "ENG"
+
+
+class Project(BaseModel):
+    """Linear project."""
+    id: str
+    name: str
+    state: str | None = None
+
+
+class User(BaseModel):
+    """Linear user."""
+    id: str
+    name: str
+    email: str | None = None
+
+
+# -----------------------------------------------------------------------------
+# GraphQL Helpers
+# -----------------------------------------------------------------------------
+
+
+LINEAR_API_URL = "https://api.linear.app/graphql"
+
+
+async def graphql_request(token: str, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Make a GraphQL request to Linear API."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            LINEAR_API_URL,
+            json={"query": query, "variables": variables or {}},
+            headers={
+                "Authorization": token,
+                "Content-Type": "application/json",
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        if "errors" in result:
+            raise Exception(f"GraphQL error: {result['errors']}")
+
+        return result.get("data", {})
+
+
+# -----------------------------------------------------------------------------
+# Connection Setup
+# -----------------------------------------------------------------------------
+
+# Define the connection - credentials will be provided via OAuth flow
+linear = Connection(
+    "linear",
+    secrets=SecretKeys(token="LINEAR_TOKEN"),
+    base_url=LINEAR_API_URL,
+)
+
+# Create the server
+server = MCPServer(
+    name="linear",
+    version="1.0.0",
+    instructions="Linear issue tracking MCP server. Use these tools to manage issues, projects, and teams in Linear.",
+    connections=[linear],
+)
+
+
+# -----------------------------------------------------------------------------
+# Tools
+# -----------------------------------------------------------------------------
+
+
+@tool(description="Get the current authenticated user's profile")
+async def get_me() -> User:
+    """Get the authenticated user's profile."""
+    token = os.environ.get("LINEAR_TOKEN", "")
+
+    query = """
+    query {
+        viewer {
+            id
+            name
+            email
+        }
+    }
+    """
+
+    data = await graphql_request(token, query)
+    viewer = data.get("viewer", {})
+
+    return User(
+        id=viewer.get("id", ""),
+        name=viewer.get("name", ""),
+        email=viewer.get("email"),
+    )
+
+
+@tool(description="List teams the user has access to")
+async def list_teams() -> list[Team]:
+    """List all teams the user has access to."""
+    token = os.environ.get("LINEAR_TOKEN", "")
+
+    query = """
+    query {
+        teams {
+            nodes {
+                id
+                name
+                key
+            }
+        }
+    }
+    """
+
+    data = await graphql_request(token, query)
+    teams = data.get("teams", {}).get("nodes", [])
+
+    return [
+        Team(id=t["id"], name=t["name"], key=t["key"])
+        for t in teams
+    ]
+
+
+@tool(description="List issues, optionally filtered by team or state")
+async def list_issues(
+    team_key: str | None = None,
+    state: IssueState | None = None,
+    limit: int = Field(default=10, ge=1, le=50),
+) -> list[Issue]:
+    """List issues with optional filters.
+
+    Args:
+        team_key: Filter by team key (e.g., "ENG")
+        state: Filter by issue state
+        limit: Maximum number of issues to return (1-50)
+    """
+    token = os.environ.get("LINEAR_TOKEN", "")
+
+    # Build filter
+    filters = []
+    if team_key:
+        filters.append(f'team: {{ key: {{ eq: "{team_key}" }} }}')
+    if state:
+        # Map our state enum to Linear's state names
+        state_map = {
+            IssueState.BACKLOG: "Backlog",
+            IssueState.TODO: "Todo",
+            IssueState.IN_PROGRESS: "In Progress",
+            IssueState.DONE: "Done",
+            IssueState.CANCELED: "Canceled",
+        }
+        linear_state = state_map.get(state, state.value)
+        filters.append(f'state: {{ name: {{ eq: "{linear_state}" }} }}')
+
+    filter_str = ", ".join(filters) if filters else ""
+    filter_clause = f"filter: {{ {filter_str} }}" if filter_str else ""
+
+    query = f"""
+    query {{
+        issues(first: {limit}, {filter_clause}) {{
+            nodes {{
+                id
+                identifier
+                title
+                description
+                url
+                priority
+                state {{
+                    name
+                }}
+                assignee {{
+                    name
+                }}
+                project {{
+                    name
+                }}
+            }}
+        }}
+    }}
+    """
+
+    data = await graphql_request(token, query)
+    issues = data.get("issues", {}).get("nodes", [])
+
+    return [
+        Issue(
+            id=i["id"],
+            identifier=i["identifier"],
+            title=i["title"],
+            description=i.get("description"),
+            state=i.get("state", {}).get("name") if i.get("state") else None,
+            priority=i.get("priority"),
+            assignee=i.get("assignee", {}).get("name") if i.get("assignee") else None,
+            project=i.get("project", {}).get("name") if i.get("project") else None,
+            url=i.get("url"),
+        )
+        for i in issues
+    ]
+
+
+@tool(description="Get details of a specific issue by its identifier (e.g., ENG-123)")
+async def get_issue(identifier: str) -> Issue | None:
+    """Get a specific issue by its identifier.
+
+    Args:
+        identifier: The issue identifier (e.g., "ENG-123")
+    """
+    token = os.environ.get("LINEAR_TOKEN", "")
+
+    query = """
+    query($identifier: String!) {
+        issue(id: $identifier) {
+            id
+            identifier
+            title
+            description
+            url
+            priority
+            state {
+                name
+            }
+            assignee {
+                name
+            }
+            project {
+                name
+            }
+        }
+    }
+    """
+
+    # Linear uses the identifier directly in the id field for lookups
+    # But we need to search by identifier filter instead
+    search_query = f"""
+    query {{
+        issues(filter: {{ identifier: {{ eq: "{identifier}" }} }}, first: 1) {{
+            nodes {{
+                id
+                identifier
+                title
+                description
+                url
+                priority
+                state {{
+                    name
+                }}
+                assignee {{
+                    name
+                }}
+                project {{
+                    name
+                }}
+            }}
+        }}
+    }}
+    """
+
+    data = await graphql_request(token, search_query)
+    issues = data.get("issues", {}).get("nodes", [])
+
+    if not issues:
+        return None
+
+    i = issues[0]
+    return Issue(
+        id=i["id"],
+        identifier=i["identifier"],
+        title=i["title"],
+        description=i.get("description"),
+        state=i.get("state", {}).get("name") if i.get("state") else None,
+        priority=i.get("priority"),
+        assignee=i.get("assignee", {}).get("name") if i.get("assignee") else None,
+        project=i.get("project", {}).get("name") if i.get("project") else None,
+        url=i.get("url"),
+    )
+
+
+@tool(description="Create a new issue in Linear")
+async def create_issue(
+    title: str,
+    team_key: str,
+    description: str | None = None,
+    priority: IssuePriority = IssuePriority.NO_PRIORITY,
+) -> Issue:
+    """Create a new issue.
+
+    Args:
+        title: Issue title
+        team_key: Team key (e.g., "ENG") - use list_teams to find available teams
+        description: Optional issue description (markdown supported)
+        priority: Issue priority (0=none, 1=urgent, 2=high, 3=medium, 4=low)
+    """
+    token = os.environ.get("LINEAR_TOKEN", "")
+
+    # First, get the team ID from the key
+    team_query = f"""
+    query {{
+        teams(filter: {{ key: {{ eq: "{team_key}" }} }}) {{
+            nodes {{
+                id
+            }}
+        }}
+    }}
+    """
+
+    team_data = await graphql_request(token, team_query)
+    teams = team_data.get("teams", {}).get("nodes", [])
+
+    if not teams:
+        raise ValueError(f"Team with key '{team_key}' not found")
+
+    team_id = teams[0]["id"]
+
+    # Create the issue
+    mutation = """
+    mutation($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+            success
+            issue {
+                id
+                identifier
+                title
+                description
+                url
+                priority
+                state {
+                    name
+                }
+            }
+        }
+    }
+    """
+
+    variables = {
+        "input": {
+            "title": title,
+            "teamId": team_id,
+            "description": description,
+            "priority": priority.value,
+        }
+    }
+
+    data = await graphql_request(token, mutation, variables)
+    result = data.get("issueCreate", {})
+
+    if not result.get("success"):
+        raise Exception("Failed to create issue")
+
+    i = result.get("issue", {})
+    return Issue(
+        id=i["id"],
+        identifier=i["identifier"],
+        title=i["title"],
+        description=i.get("description"),
+        state=i.get("state", {}).get("name") if i.get("state") else None,
+        priority=i.get("priority"),
+        url=i.get("url"),
+    )
+
+
+@tool(description="Search issues by text query")
+async def search_issues(
+    query: str,
+    limit: int = Field(default=10, ge=1, le=50),
+) -> list[Issue]:
+    """Search for issues by text.
+
+    Args:
+        query: Search query (searches title and description)
+        limit: Maximum number of results (1-50)
+    """
+    token = os.environ.get("LINEAR_TOKEN", "")
+
+    # Linear doesn't have a direct text search in GraphQL filters,
+    # so we use the issueSearch query
+    search_query = """
+    query($query: String!, $first: Int!) {
+        issueSearch(query: $query, first: $first) {
+            nodes {
+                id
+                identifier
+                title
+                description
+                url
+                priority
+                state {
+                    name
+                }
+                assignee {
+                    name
+                }
+                project {
+                    name
+                }
+            }
+        }
+    }
+    """
+
+    data = await graphql_request(token, search_query, {"query": query, "first": limit})
+    issues = data.get("issueSearch", {}).get("nodes", [])
+
+    return [
+        Issue(
+            id=i["id"],
+            identifier=i["identifier"],
+            title=i["title"],
+            description=i.get("description"),
+            state=i.get("state", {}).get("name") if i.get("state") else None,
+            priority=i.get("priority"),
+            assignee=i.get("assignee", {}).get("name") if i.get("assignee") else None,
+            project=i.get("project", {}).get("name") if i.get("project") else None,
+            url=i.get("url"),
+        )
+        for i in issues
+    ]
+
+
+@tool(description="List projects in a team")
+async def list_projects(team_key: str | None = None) -> list[Project]:
+    """List projects, optionally filtered by team.
+
+    Args:
+        team_key: Optional team key to filter projects
+    """
+    token = os.environ.get("LINEAR_TOKEN", "")
+
+    filter_clause = ""
+    if team_key:
+        # Get team ID first
+        team_query = f"""
+        query {{
+            teams(filter: {{ key: {{ eq: "{team_key}" }} }}) {{
+                nodes {{
+                    id
+                }}
+            }}
+        }}
+        """
+        team_data = await graphql_request(token, team_query)
+        teams = team_data.get("teams", {}).get("nodes", [])
+        if teams:
+            team_id = teams[0]["id"]
+            filter_clause = f'filter: {{ accessibleTeams: {{ id: {{ eq: "{team_id}" }} }} }}'
+
+    query = f"""
+    query {{
+        projects({filter_clause}) {{
+            nodes {{
+                id
+                name
+                state
+            }}
+        }}
+    }}
+    """
+
+    data = await graphql_request(token, query)
+    projects = data.get("projects", {}).get("nodes", [])
+
+    return [
+        Project(id=p["id"], name=p["name"], state=p.get("state"))
+        for p in projects
+    ]
+
+
+# Register all tools with the server
+server.collect(
+    get_me,
+    list_teams,
+    list_issues,
+    get_issue,
+    create_issue,
+    search_issues,
+    list_projects,
+)
+
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+
+
+async def main() -> None:
+    """Run the server (for local testing)."""
+    token = os.environ.get("LINEAR_TOKEN")
+    if not token:
+        print("=" * 60)
+        print("LINEAR MCP SERVER")
+        print("=" * 60)
+        print()
+        print("For local testing, set LINEAR_TOKEN environment variable:")
+        print("  export LINEAR_TOKEN='lin_api_...'")
+        print()
+        print("For deployment with OAuth, set these Lambda env vars:")
+        print("  OAUTH_ENABLED=true")
+        print("  OAUTH_AUTHORIZE_URL=https://linear.app/oauth/authorize")
+        print("  OAUTH_TOKEN_URL=https://api.linear.app/oauth/token")
+        print("  OAUTH_CLIENT_ID=b119ad4bbfdf5e3c7e6bb8dc42bda206")
+        print("  OAUTH_CLIENT_SECRET=encrypted:<encrypted_secret>")
+        print("  OAUTH_SCOPES_AVAILABLE=read,write,issues:create")
+        print()
+        print("Note: Client requests scopes via /oauth/connect?scopes=read,write")
+        print()
+        print("=" * 60)
+        return
+
+    print(f"Server: {server.name} v{server._version}")
+    print(f"Tools: {server.tool_names}")
+    print(f"Connections: {list(server.connections.keys())}")
+    print()
+
+    # Test the connection
+    print("Testing connection...")
+    try:
+        user = await get_me()
+        print(f"  Authenticated as: {user.name} ({user.email})")
+
+        teams = await list_teams()
+        print(f"  Teams: {[t.key for t in teams]}")
+    except Exception as e:
+        print(f"  Error: {e}")
+        return
+
+    print()
+    print("Starting server on http://127.0.0.1:8000/mcp")
+    await server.serve()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
