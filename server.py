@@ -575,48 +575,8 @@ server.collect(
 
 
 async def main() -> None:
-    """Run the server (for local testing)."""
-    token = os.environ.get("LINEAR_TOKEN")
-    if not token:
-        print("=" * 60)
-        print("LINEAR MCP SERVER")
-        print("=" * 60)
-        print()
-        print("For local testing, set LINEAR_TOKEN environment variable:")
-        print("  export LINEAR_TOKEN='lin_api_...'")
-        print()
-        print("For deployment with OAuth, set these Lambda env vars:")
-        print("  OAUTH_ENABLED=true")
-        print("  OAUTH_AUTHORIZE_URL=https://linear.app/oauth/authorize")
-        print("  OAUTH_TOKEN_URL=https://api.linear.app/oauth/token")
-        print("  OAUTH_CLIENT_ID=b119ad4bbfdf5e3c7e6bb8dc42bda206")
-        print("  OAUTH_CLIENT_SECRET=encrypted:<encrypted_secret>")
-        print("  OAUTH_SCOPES_AVAILABLE=read,write,issues:create")
-        print()
-        print("Note: Client requests scopes via /oauth/connect?scopes=read,write")
-        print()
-        print("=" * 60)
-        return
-
-    print(f"Server: {server.name} v{server._version}")
-    print(f"Tools: {server.tool_names}")
-    print(f"Connections: {list(server.connections.keys())}")
-    print()
-
-    # Test the connection
-    print("Testing connection...")
-    try:
-        user = await get_me()
-        print(f"  Authenticated as: {user.name} ({user.email})")
-
-        teams = await list_teams()
-        print(f"  Teams: {[t.key for t in teams]}")
-    except Exception as e:
-        print(f"  Error: {e}")
-        return
-
-    print()
-    print("Starting server on http://127.0.0.1:8000/mcp")
+    """Run the server."""
+    # Server always starts - credentials provided per-request via OAuth
     await server.serve()
 
 
