@@ -152,12 +152,15 @@ linear = Connection(
 
 # Create the server with auth disabled (allows health checks to pass)
 # The Connection declaration tells the platform to inject OAuth tokens as LINEAR_TOKEN
+# CRITICAL: streamable_http_stateless=True is required for Lambda deployments
+# because each Lambda invocation may be handled by a different instance.
 server = MCPServer(
     name="linear",
     version="1.0.0",
     instructions="Linear issue tracking MCP server. Use these tools to manage issues, projects, and teams in Linear.",
     connections=[linear],
     authorization=AuthorizationConfig(enabled=False),
+    streamable_http_stateless=True,
 )
 
 
