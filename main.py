@@ -161,7 +161,7 @@ server = MCPServer(
     instructions="Linear issue tracking MCP server. Use these tools to manage issues, projects, and teams in Linear.",
     connections=[linear],
     streamable_http_stateless=True,
-    authorization_server="https://veterinary-deals-sleeping-aqua.trycloudflare.com",
+    authorization_server="http://dev.as.dedaluslabs.ai",
     authorization=AuthorizationConfig(enabled=True, fail_open=True),
 )
 
