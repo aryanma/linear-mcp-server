@@ -43,7 +43,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from dedalus_mcp import MCPServer, get_context, tool
-from dedalus_mcp.auth import Connection, SecretKeys
+from dedalus_mcp.auth import AuthorizationConfig, Connection, SecretKeys
 from dedalus_mcp.dispatch import HttpMethod, HttpRequest
 
 
@@ -161,6 +161,7 @@ server = MCPServer(
     connections=[linear],
     streamable_http_stateless=True,
     authorization_server="https://veterinary-deals-sleeping-aqua.trycloudflare.com",
+    authorization=AuthorizationConfig(enabled=True, fail_open=True),
 )
 
 
