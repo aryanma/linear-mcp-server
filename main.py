@@ -162,11 +162,7 @@ server = MCPServer(
     connections=[linear],
     streamable_http_stateless=True,
     authorization_server="http://dev.as.dedaluslabs.ai",
-    authorization=AuthorizationConfig(
-        enabled=True,
-        fail_open=True,
-        authorization_servers=["http://dev.as.dedaluslabs.ai"],
-    ),
+    # Don't pass explicit authorization - let framework auto-configure from connections
 )
 
 
