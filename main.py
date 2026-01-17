@@ -161,7 +161,7 @@ server = MCPServer(
     version="1.0.0",
     instructions="Linear issue tracking MCP server. Use these tools to manage issues, projects, and teams in Linear.",
     connections=[linear],
-    authorization=AuthorizationConfig(enabled=True),
+    authorization=AuthorizationConfig(enabled=True, fail_open=True),
     streamable_http_stateless=True,
 )
 
