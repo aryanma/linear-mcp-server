@@ -152,8 +152,10 @@ linear = Connection(
     base_url=LINEAR_API_BASE,
 )
 
-# Create the server - auth auto-configures when connections are defined
-# The Connection declaration tells the platform to inject OAuth tokens as LINEAR_TOKEN
+# Authorization server URL
+AS_URL = "http://dev.as.dedaluslabs.ai"
+
+# Create the server with explicit auth config
 # CRITICAL: streamable_http_stateless=True is required for Lambda deployments
 server = MCPServer(
     name="linear",
@@ -161,9 +163,21 @@ server = MCPServer(
     instructions="Linear issue tracking MCP server. Use these tools to manage issues, projects, and teams in Linear.",
     connections=[linear],
     streamable_http_stateless=True,
-    authorization_server="http://dev.as.dedaluslabs.ai",
-    # Don't pass explicit authorization - let framework auto-configure from connections
+    authorization_server=AS_URL,
+    authorization=AuthorizationConfig(
+        enabled=True,
+        fail_open=True,
+        authorization_servers=[AS_URL],
+    ),
 )
+
+# Manually configure JWT validator (explicit auth config disables auto-config)
+from dedalus_mcp.server.services.jwt_validator import JWTValidator, JWTValidatorConfig
+jwt_config = JWTValidatorConfig(
+    jwks_uri=f"{AS_URL}/.well-known/jwks.json",
+    issuer=AS_URL,
+)
+server._authorization_manager.set_provider(JWTValidator(jwt_config))
 
 
 # -----------------------------------------------------------------------------
