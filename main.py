@@ -121,11 +121,12 @@ async def graphql_request(query: str, variables: dict[str, Any] | None = None) -
     """
     ctx = get_context()
 
+    # Note: Content-Type header is automatically added by the Enclave
+    # Do not include it here to avoid duplicate headers
     response = await ctx.dispatch(HttpRequest(
         method=HttpMethod.POST,
         path="/graphql",
         body={"query": query, "variables": variables or {}},
-        headers={"Content-Type": "application/json"},
     ))
 
     if not response.success:
