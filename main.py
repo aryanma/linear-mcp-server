@@ -134,11 +134,14 @@ async def graphql_request(query: str, variables: dict[str, Any] | None = None) -
         print(f"DEBUG dispatch error: {response.error}")
         raise Exception(f"Dispatch error: {response.error.code} - {response.error.message}")
 
+    print(f"DEBUG response status={response.response.status} body={response.response.body}")
+
     if response.response.status >= 400:
         raise Exception(f"Linear API error ({response.response.status}): {response.response.body}")
 
     result = response.response.body
     if isinstance(result, dict) and "errors" in result:
+        print(f"DEBUG GraphQL errors: {result['errors']}")
         raise Exception(f"GraphQL error: {result['errors']}")
 
     return result.get("data", {}) if isinstance(result, dict) else {}
