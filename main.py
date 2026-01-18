@@ -129,7 +129,9 @@ async def graphql_request(query: str, variables: dict[str, Any] | None = None) -
         body={"query": query, "variables": variables or {}},
     ))
 
+    print(f"DEBUG dispatch response: success={response.success}")
     if not response.success:
+        print(f"DEBUG dispatch error: {response.error}")
         raise Exception(f"Dispatch error: {response.error.code} - {response.error.message}")
 
     if response.response.status >= 400:
