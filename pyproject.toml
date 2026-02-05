@@ -1,0 +1,98 @@
+# --- BUILD SYSTEM ---
+
+[build-system]
+requires = ["uv_build>=0.8.22,<0.9.0"]
+build-backend = "uv_build"
+
+# --- PROJECT CONFIGURATION ---
+
+[project]
+name = "linear-mcp"
+version = "0.0.1"
+description = "A Linear MCP server using OAuth2 bearer token auth."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Dedalus Labs", email = "oss@dedaluslabs.ai" }]
+keywords = ["ai", "mcp", "agents", "dedalus", "linear", "issues", "project-management"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "dedalus-mcp>=0.7.0",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
+    "uvloop>=0.22.1; platform_system != 'Windows'",
+]
+
+[project.urls]
+Homepage = "https://github.com/dedalus-labs/linear-mcp"
+Repository = "https://github.com/dedalus-labs/linear-mcp"
+
+# --- DEPENDENCY GROUPS ---
+
+[dependency-groups]
+test = ["anyio>=4.11.0", "pytest>=8.4.2", "pytest-asyncio>=1.2.0"]
+lint = ["ruff>=0.13.3"]
+dev = [{ include-group = "test" }, { include-group = "lint" }]
+
+# --- UV CONFIGURATION ---
+
+[tool.uv]
+preview = true           # Enable all preview features
+package = false          # Not a distributable package, just a runnable project
+default-groups = ["dev"]
+cache-dir = ".cache/uv"
+
+# Performance optimizations
+compile-bytecode = true # 10-20% faster startup
+link-mode = "hardlink"  # Fastest cache linking (macOS/Linux)
+
+# Platform targeting (20-30% faster resolution)
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
+
+# Resolution strategy
+resolution = "highest"      # Latest compatible versions
+prerelease = "if-necessary" # Allow prereleases when needed
+
+[tool.uv.sources]
+
+[tool.uv.build-backend]
+source-exclude = [
+    "dist/**",
+    "**/__pycache__/**",
+    "**/build/**",
+    "**/.pytest_cache/**",
+]
+
+# --- RUFF ---
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+fix = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# --- PYTEST ---
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
